@@ -1,150 +1,79 @@
-#include <atomic>
-#include <bitset>
-#include <cassert>
-#include <chrono>
-#include <concepts>
-#include <cstring>
-#include <functional>
+#include <iomanip>
 #include <iostream>
-#include <limits>
-#include <random>
 #include <sstream>
-#include <string>
-#include <thread>
-#include <vector>
 
-using namespace std::chrono_literals;
+#include "cockroach.hpp"
+#include "helper.hpp"
 
-#define green "\033[0;32m"
-#define red "\033[0;31m"
-#define reset "\033[0m"
-#define yellow "\033[0;33m"
+int main() {
+  std::string const names[5] = {"Jim", "Sally", "Fluffy", "George",
+                                "Lucky One"};
+  size_t constexpr SIZE = sizeof(names) / sizeof(names[0]);
 
-using string = std::vector<std::uint8_t>;
-
-static int ARGC;
-static char const** ARGV;
-void usage();
-template <typename T>
-T input_checked(char const* string);
-string gen_random_string(size_t const size, std::mt19937& mt);
-bool check_hash(size_t hash, size_t Z);
-template <std::integral T>
-inline void hash_combine(std::size_t& seed, const T& v);
-
-using std::chrono::duration_cast;
-
-int main(int argc, char const* argv[]) {
-  ARGC = argc;
-  ARGV = argv;
-  if (argc < 3) {
-    std::cerr << red "Invalid number of arguments!\n" reset;
-    usage();
+  std::cout << "In todays race paticipate 5 cockroaches: \n";
+  for (size_t i = 0; auto& name : names) {
+    std::cout << "[" << ++i << "] " << name << "\n";
   }
-  auto const Z = input_checked<size_t>(argv[1]);
-  auto const N = input_checked<size_t>(argv[2]);
-
-  std::random_device rd;
-  std::mt19937 mt{rd()};
-  std::uniform_int_distribution<size_t> urd{20, 1000};
-  string const target_string = gen_random_string(urd(mt), mt);
-  std::vector<std::thread> threads;
-  std::atomic_bool complete = false;
-  std::uint64_t result;
-  std::size_t result_hash;
-
-  auto started_time = std::chrono::high_resolution_clock::now();
-  size_t const hash_checkpoint = [&target_string] {
-    size_t hash_calc = 0;
-    for (auto item : target_string) {
-      hash_combine(hash_calc, item);
+  std::cout << "\nChoose one of cockroaches that you bet for: ";
+  long choosen = SIZE;
+  do {
+    std::string input;
+    std::getline(std::cin, input);
+    std::stringstream ss;
+    ss << input;
+    ss >> choosen;
+    if (!ss.eof()) {
+      auto iter = std::find(begin(names), end(names), input);
+      if (iter != end(names)) {
+        choosen = iter - begin(names);
+        break;
+      }
     }
-    return hash_calc;
-  }();
+    if (choosen > 0 && choosen <= static_cast<long>(SIZE)) {
+      break;
+    }
+    std::cerr << "Invalid option provided: " << input << "\nTry again: ";
+  } while (1);
 
-  for (size_t i = 0; i < N; ++i) {
-    auto seed = rd();
-    threads.emplace_back(
-        [hash_checkpoint, seed, Z, &result, &complete, &result_hash]() {
-          thread_local static std::mt19937 mt{seed};
-          std::uniform_int_distribution<uint64_t> uid{
-              0, std::numeric_limits<uint64_t>::max()};
-
-          size_t hash;
-          std::uint64_t attempt;
-          do {
-            hash = hash_checkpoint;
-            attempt = uid(mt);
-            hash_combine(hash, attempt);
-          } while (!check_hash(hash, Z) &&
-                   !complete.load(std::memory_order_relaxed));
-          if (complete.exchange(true, std::memory_order_seq_cst)) return;
-          result = attempt;
-          result_hash = hash;
-        });
+  std::condition_variable startWait;
+  std::condition_variable finishWait;
+  std::atomic<Cockroach*> winner = nullptr;
+  bool started = false;
+  const double distance = 2;
+  std::vector<std::unique_ptr<Cockroach>> roaches;
+  for (size_t i = 0; i < 5; ++i) {
+    roaches.emplace_back(std::make_unique<Cockroach>(
+        names[i], finishWait, distance, startWait, winner, started));
   }
-  for (auto& th : threads) th.join();
-  auto ended_time = std::chrono::high_resolution_clock::now();
-  std::cout << green "Original string size: ` " yellow << target_string.size()
-            << green " `\nOriginal string bytes: ` " yellow;
-  for (auto item : target_string) std::cout << (uint16_t)item << " ";
-  std::cout << green " `\nOriginal string: ` " yellow;
-  for (auto item : target_string)
-    if (isgraph(item)) std::cout << item; else std::cout << ".";
-  std::cout << green " `\nResult suffix: ` " yellow;
-  union {
-    uint8_t bytes[8];
-    uint64_t big;
-  } res;
-  res.big = result;
-  for (auto item : res.bytes) std::cout << (uint16_t)item << " ";
-  std::cout << green "`\nResult hash: ` " yellow << std::bitset<64>(result_hash)
-            << green " `\nTime spent: ` " yellow
-            << duration_cast<std::chrono::milliseconds>(ended_time -
-                                                        started_time)
-                   .count()
-            << "ms" green " `\n";
+  started = true;
+  startWait.notify_all();
+
+  std::mutex finished;
+  std::unique_lock<std::mutex> lock{finished};
+  finishWait.wait(lock, [&winner]() { return winner.load() != nullptr; });
+
+  auto won = winner.load();
+  std::cout << "\nDistances runned by cockroaches:\n";
+
+  size_t const maxNameSize = max(foreach (
+      begin(names), end(names), [](auto name) { return name.size(); }));
+
+  for (auto& roach : roaches) {
+    std::cout << roach->getName() << ":    ";
+    for (size_t i = roach->getName().size(); i < maxNameSize; ++i) {
+      std::cout << ' ';
+    }
+    std::cout << std::setprecision(5) << std::fixed << roach->getDist()
+              << "mm\n";
+  }
+  std::cout << "\nCockroach named " << won->getName() << " won this race!\n\n";
+
+  if (std::find(begin(names), end(names), won->getName()) - begin(names) ==
+      choosen - 1) {
+    std::cout << "You won the bid. Congrats!\n";
+  } else {
+    std::cout << "Nah... You lost all your money.\n";
+  }
 
   return 0;
-}
-
-bool check_hash(size_t hash, size_t Z) {
-  const size_t mask = ((1ul << Z) - 1ul) << (sizeof(size_t) * 8 - Z);
-  return (hash & mask) == 0;
-}
-
-template <std::integral T>
-inline void hash_combine(std::size_t& seed, const T& v) {
-  thread_local static std::hash<T> hasher;
-  seed ^= hasher(v) + 0x9e3779b9 + (seed << 6ul) + (seed >> 2ul);
-}
-
-string gen_random_string(size_t const size, std::mt19937& mt) {
-  static std::uniform_int_distribution<uint8_t> distr{0, 255};
-  string ss;
-  ss.reserve(size);
-  for (size_t i = 0; i < size; ++i) {
-    ss.emplace_back(distr(mt));
-  }
-  return ss;
-}
-
-template <typename T>
-T input_checked(char const* string) {
-  T result;
-  std::stringstream ss;
-  ss << string;
-  ss >> result;
-  if (!ss.eof()) {
-    std::cerr << red "Invalid argument value\n" reset;
-    usage();
-  }
-  return result;
-}
-
-void usage() {
-  assert(ARGC > 0);
-  std::cerr << "Usage:\n\t " << ARGV[0]
-            << " <target number of zeros> <number of threads>\n";
-  exit(1);
 }

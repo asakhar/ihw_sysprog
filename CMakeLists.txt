@@ -11,5 +11,5 @@ else()
 endif()
 target_compile_features(default INTERFACE cxx_std_20)
 
-add_executable(main main.cpp)
+add_executable(main main.cpp cockroach.cpp)
 target_link_libraries(main PUBLIC default)
